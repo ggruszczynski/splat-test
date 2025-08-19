@@ -1063,28 +1063,103 @@ async function main() {
 
 
     // Smartphone orientation event for camera rotation
-    let lastAlpha = null, lastBeta = null, lastGamma = null;
-    const orientationSensitivity = 0.75; // Lower = slower reaction
-    window.addEventListener("deviceorientation", (e) => {
-        // Only rotate if the event provides valid data
-        if (e.alpha != null && e.beta != null && e.gamma != null) {
-            // Calculate deltas
-            if (lastAlpha !== null && lastBeta !== null && lastGamma !== null) {
-                let dAlpha = -(e.alpha - lastAlpha) * Math.PI / 180 * orientationSensitivity;
-                let dBeta = (e.beta - lastBeta) * Math.PI / 180 * orientationSensitivity;
-                let dGamma = -(e.gamma - lastGamma) * Math.PI / 180 * orientationSensitivity;
+    // let lastAlpha = null, lastBeta = null, lastGamma = null;
+    // const orientationSensitivity = 0.75; // Lower = slower reaction
+    // window.addEventListener("deviceorientation", (e) => {
+    //     // Only rotate if the event provides valid data
+    //     if (e.alpha != null && e.beta != null && e.gamma != null) {
+    //         // Calculate deltas
+    //         if (lastAlpha !== null && lastBeta !== null && lastGamma !== null) {
+    //             let dAlpha = -(e.alpha - lastAlpha) * Math.PI / 180 * orientationSensitivity;
+    //             let dBeta = (e.beta - lastBeta) * Math.PI / 180 * orientationSensitivity;
+    //             let dGamma = -(e.gamma - lastGamma) * Math.PI / 180 * orientationSensitivity;
 
-                let inv = invert4(viewMatrix);
+    //             let inv = invert4(viewMatrix);
                 
-                inv = rotate4(inv, dBeta,  1, 0, 0); // Pitch (X axis): W-S keys
-                inv = rotate4(inv, dGamma, 0, 1, 0); // Roll (Y axis): A-D keys
-                inv = rotate4(inv, dAlpha, 0, 0, 1); // Yaw (Z axis): Q-E keys  
+    //             // see https://sensor-js.xyz/demo.html
+    //             inv = rotate4(inv, dBeta,  1, 0, 0); // Pitch (X axis): W-S keys
+    //             inv = rotate4(inv, dGamma, 0, 1, 0); // Roll (Y axis): A-D keys
+    //             inv = rotate4(inv, dAlpha, 0, 0, 1); // Yaw (Z axis): Q-E keys  
             
+    //             viewMatrix = invert4(inv);
+    //         }
+    //         lastAlpha = e.alpha;
+    //         lastBeta = e.beta;
+    //         lastGamma = e.gamma;
+    //     }
+    // }, { passive: false });
+
+    let lastQuaternion = null;
+    const orientationSensitivity = 0.75;
+
+    function getScreenOrientation() {
+        // Returns angle in degrees: 0, 90, 180, 270
+        return (window.screen.orientation && window.screen.orientation.angle) || 0;
+    }
+
+    function eulerToQuaternion(alpha, beta, gamma, screenOrientation) {
+        // Convert DeviceOrientation Euler angles to quaternion
+        // See: https://w3c.github.io/deviceorientation/#deviceorientation
+        const degToRad = Math.PI / 180;
+        alpha = alpha ? alpha * degToRad : 0; // Z axis
+        beta = beta ? beta * degToRad : 0;   // X axis
+        gamma = gamma ? gamma * degToRad : 0; // Y axis
+        screenOrientation = screenOrientation * degToRad;
+
+        // ZXY intrinsic rotation
+        const cA = Math.cos(alpha / 2), sA = Math.sin(alpha / 2);
+        const cB = Math.cos(beta / 2),  sB = Math.sin(beta / 2);
+        const cG = Math.cos(gamma / 2), sG = Math.sin(gamma / 2);
+
+        // Quaternion from device orientation
+        let q = [
+            cA * cB * cG + sA * sB * sG, // w
+            cA * sB * cG + sA * cB * sG, // x
+            cA * cB * sG - sA * sB * cG, // y
+            sA * cB * cG - cA * sB * sG  // z
+        ];
+
+        // Apply screen orientation (rotation around Z)
+        const cSO = Math.cos(screenOrientation / 2), sSO = Math.sin(screenOrientation / 2);
+        let qSO = [cSO, 0, 0, sSO];
+        // Quaternion multiplication: q = qSO * q
+        let w = qSO[0]*q[0] - qSO[1]*q[1] - qSO[2]*q[2] - qSO[3]*q[3];
+        let x = qSO[0]*q[1] + qSO[1]*q[0] + qSO[2]*q[3] - qSO[3]*q[2];
+        let y = qSO[0]*q[2] - qSO[1]*q[3] + qSO[2]*q[0] + qSO[3]*q[1];
+        let z = qSO[0]*q[3] + qSO[1]*q[2] - qSO[2]*q[1] + qSO[3]*q[0];
+        return [w, x, y, z];
+    }
+
+    function quaternionToRotationMatrix(q) {
+        // Converts quaternion [w, x, y, z] to 4x4 rotation matrix (flat array)
+        const w = q[0], x = q[1], y = q[2], z = q[3];
+        return [
+            1 - 2*y*y - 2*z*z, 2*x*y - 2*z*w,     2*x*z + 2*y*w,     0,
+            2*x*y + 2*z*w,     1 - 2*x*x - 2*z*z, 2*y*z - 2*x*w,     0,
+            2*x*z - 2*y*w,     2*y*z + 2*x*w,     1 - 2*x*x - 2*y*y, 0,
+            0,                 0,                 0,                 1
+        ];
+    }
+
+    window.addEventListener("deviceorientation", (e) => {
+        if (e.alpha != null && e.beta != null && e.gamma != null) {
+            const screenOrientation = getScreenOrientation();
+            const q = eulerToQuaternion(e.alpha, e.beta, e.gamma, screenOrientation);
+
+            if (lastQuaternion) {
+                // Compute delta quaternion (rotation since last frame)
+                // For simplicity, apply the new orientation directly:
+                let rotMatrix = quaternionToRotationMatrix(q);
+
+                // Optionally, blend with previous orientation for smoothness:
+                // (not shown here for brevity)
+
+                // Apply rotation to viewMatrix
+                let inv = invert4(viewMatrix);
+                inv = multiply4(inv, rotMatrix);
                 viewMatrix = invert4(inv);
             }
-            lastAlpha = e.alpha;
-            lastBeta = e.beta;
-            lastGamma = e.gamma;
+            lastQuaternion = q;
         }
     }, { passive: false });
 
