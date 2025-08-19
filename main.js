@@ -1090,159 +1090,90 @@ async function main() {
     // }, { passive: false });
 
 
-    const orientationSensitivity = 0.75;
 
     let lastQuaternion = null;
-    let targetQuaternion = null;
-    let smoothQuaternion = [1, 0, 0, 0]; // identity
-    const slerpFactor = 0.1; // adjust for smoothness
+let smoothQuaternion = [1, 0, 0, 0]; // current accumulated orientation
 
+function quatNormalize(q) {
+    let len = Math.hypot(...q);
+    return q.map(v => v / len);
+}
 
-    let calibrationActive = true;
-    let calibrationStartTime = null;
-    let calibrationSamples = [];
-    let referenceQuaternion = null;
-    const calibrationDuration = 5000; // ms
+function quatMultiply(a, b) {
+    return [
+        a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
+        a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
+        a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
+        a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0]
+    ];
+}
 
-    function quaternionSlerp(q1, q2, t) {
-        let dot = q1[0]*q2[0] + q1[1]*q2[1] + q1[2]*q2[2] + q1[3]*q2[3];
-        if (dot < 0) { q2 = q2.map(v => -v); dot = -dot; }
-        if (dot > 0.9995) {
-            let result = q1.map((v,i) => v + t*(q2[i]-v));
-            let len = Math.hypot(...result);
-            return result.map(v => v/len);
-        }
-        let theta0 = Math.acos(dot);
-        let theta = theta0 * t;
-        let sin0 = Math.sin(theta0);
-        let s0 = Math.cos(theta) - dot * Math.sin(theta) / sin0;
-        let s1 = Math.sin(theta) / sin0;
-        let res = q1.map((v,i) => s0*v + s1*q2[i]);
-        let len = Math.hypot(...res);
-        return res.map(v => v/len);
-    }
+function quatInvert(q) {
+    return [q[0], -q[1], -q[2], -q[3]];
+}
 
-    function getScreenOrientation() {
-        // Returns angle in degrees: 0, 90, 180, 270
-        return (window.screen.orientation && window.screen.orientation.angle) || 0;
-    }
+function eulerToQuaternion(alpha, beta, gamma, screenOrientation) {
+    const d2r = Math.PI/180;
+    alpha*=d2r; beta*=d2r; gamma*=d2r; screenOrientation*=d2r;
+    const cA=Math.cos(alpha/2), sA=Math.sin(alpha/2);
+    const cB=Math.cos(beta/2),  sB=Math.sin(beta/2);
+    const cG=Math.cos(gamma/2), sG=Math.sin(gamma/2);
+    let q=[ cA*cB*cG+sA*sB*sG,
+            cA*sB*cG+sA*cB*sG,
+            cA*cB*sG-sA*sB*cG,
+            sA*cB*cG-cA*sB*sG ];
+    // apply screen orientation around Z
+    const cSO=Math.cos(screenOrientation/2), sSO=Math.sin(screenOrientation/2);
+    let qSO=[cSO,0,0,sSO];
+    return quatNormalize(quatMultiply(qSO,q));
+}
 
-    function eulerToQuaternion(alpha, beta, gamma, screenOrientation) {
-        const deg2rad = Math.PI/180;
-        alpha *= deg2rad; beta *= deg2rad; gamma *= deg2rad;
-        screenOrientation *= deg2rad;
-        const cA = Math.cos(alpha/2), sA = Math.sin(alpha/2);
-        const cB = Math.cos(beta/2),  sB = Math.sin(beta/2);
-        const cG = Math.cos(gamma/2), sG = Math.sin(gamma/2);
-        let q = [
-            cA*cB*cG + sA*sB*sG,
-            cA*sB*cG + sA*cB*sG,
-            cA*cB*sG - sA*sB*cG,
-            sA*cB*cG - cA*sB*sG
-        ];
-        // Apply screen orientation around Z
-        const cSO = Math.cos(screenOrientation/2), sSO = Math.sin(screenOrientation/2);
-        let qSO = [cSO,0,0,sSO];
-        let w = qSO[0]*q[0] - qSO[1]*q[1] - qSO[2]*q[2] - qSO[3]*q[3];
-        let x = qSO[0]*q[1] + qSO[1]*q[0] + qSO[2]*q[3] - qSO[3]*q[2];
-        let y = qSO[0]*q[2] - qSO[1]*q[3] + qSO[2]*q[0] + qSO[3]*q[1];
-        let z = qSO[0]*q[3] + qSO[1]*q[2] - qSO[2]*q[1] + qSO[3]*q[0];
-        return [w,x,y,z];
-    }
+function quatToMatrix(q) {
+    const [w,x,y,z]=q;
+    return [
+        1-2*y*y-2*z*z, 2*x*y-2*z*w,   2*x*z+2*y*w,   0,
+        2*x*y+2*z*w,   1-2*x*x-2*z*z, 2*y*z-2*x*w,   0,
+        2*x*z-2*y*w,   2*y*z+2*x*w,   1-2*x*x-2*y*y, 0,
+        0,0,0,1
+    ];
+}
 
-    function quaternionToRotationMatrix(q) {
-        const [w,x,y,z] = q;
-        return [
-            1-2*y*y-2*z*z, 2*x*y-2*z*w,   2*x*z+2*y*w,   0,
-            2*x*y+2*z*w,   1-2*x*x-2*z*z, 2*y*z-2*x*w,   0,
-            2*x*z-2*y*w,   2*y*z+2*x*w,   1-2*x*x-2*y*y, 0,
-            0,0,0,1
-        ];
-    }
+window.addEventListener("deviceorientation", e => {
+    if (e.alpha!=null && e.beta!=null && e.gamma!=null) {
+        const screenOrientation = (screen.orientation && screen.orientation.angle) || 0;
+        let qNow = eulerToQuaternion(e.alpha,e.beta,e.gamma,screenOrientation);
 
-    // capture orientation but don’t apply immediately
-    window.addEventListener("deviceorientation", e => {
-        if (e.alpha != null && e.beta != null && e.gamma != null) {
-            const screenOrientation = (screen.orientation && screen.orientation.angle) || 0;
-            targetQuaternion = eulerToQuaternion(e.alpha, e.beta, e.gamma, screenOrientation);
-        }
-    }, {passive:true});
+        if (lastQuaternion) {
+            // relative rotation: Δq = qNow * inverse(qLast)
+            let deltaQ = quatMultiply(qNow, quatInvert(lastQuaternion));
 
-    // apply smoothly once per frame
-    function updateOrientation() {
-        if (targetQuaternion) {
-            smoothQuaternion = quaternionSlerp(smoothQuaternion, targetQuaternion, slerpFactor);
-            let rotMatrix = quaternionToRotationMatrix(smoothQuaternion);
+            // accumulate: smoothQuaternion = Δq * smoothQuaternion
+            smoothQuaternion = quatNormalize(quatMultiply(deltaQ, smoothQuaternion));
+
+            // apply to viewMatrix
+            let rotMatrix = quatToMatrix(smoothQuaternion);
             let inv = invert4(viewMatrix);
             inv = multiply4(inv, rotMatrix);
             viewMatrix = invert4(inv);
         }
-        requestAnimationFrame(updateOrientation);
+
+        lastQuaternion = qNow;
     }
-    updateOrientation();
-        
-    // window.addEventListener("deviceorientation", (e) => {
-    //     if (e.alpha != null && e.beta != null && e.gamma != null) {
-    //         const screenOrientation = getScreenOrientation();
-    //         let q = eulerToQuaternion(e.alpha, e.beta, e.gamma, screenOrientation);
+}, { passive: true });
 
-    //         // Calibration phase: collect samples for first 5 seconds
-    //         if (calibrationActive) {
-    //             if (!calibrationStartTime) calibrationStartTime = Date.now();
-    //             calibrationSamples.push(q);
 
-    //             if (Date.now() - calibrationStartTime > calibrationDuration) {
-    //                 // Average all calibration quaternions
-    //                 let avg = [0, 0, 0, 0];
-    //                 for (let sample of calibrationSamples) {
-    //                     // Ensure same hemisphere for averaging
-    //                     if (quaternionDot(sample, calibrationSamples[0]) < 0) {
-    //                         sample = sample.map(v => -v);
-    //                     }
-    //                     avg = avg.map((v, i) => v + sample[i]);
-    //                 }
-    //                 avg = avg.map(v => v / calibrationSamples.length);
-    //                 // Normalize
-    //                 let len = Math.hypot(...avg);
-    //                 referenceQuaternion = avg.map(v => v / len);
 
-    //                 calibrationActive = false;
-    //                 calibrationSamples = [];
-    //                 console.log("Calibration complete. Reference quaternion:", referenceQuaternion);
-    //             }
-    //             return; // Don't update scene during calibration
-    //         }
 
-    //         // After calibration: apply orientation relative to reference
-    //         if (referenceQuaternion) {
-    //             // Compute relative quaternion: q_rel = q * inverse(referenceQuaternion)
-    //             let refInv = [referenceQuaternion[0], -referenceQuaternion[1], -referenceQuaternion[2], -referenceQuaternion[3]];
-    //             // Quaternion multiplication: q_rel = q * refInv
-    //             let w = q[0]*refInv[0] - q[1]*refInv[1] - q[2]*refInv[2] - q[3]*refInv[3];
-    //             let x = q[0]*refInv[1] + q[1]*refInv[0] + q[2]*refInv[3] - q[3]*refInv[2];
-    //             let y = q[0]*refInv[2] - q[1]*refInv[3] + q[2]*refInv[0] + q[3]*refInv[1];
-    //             let z = q[0]*refInv[3] + q[1]*refInv[2] - q[2]*refInv[1] + q[3]*refInv[0];
-    //             let q_rel = [w, x, y, z];
-    //             // Normalize
-    //             let len = Math.hypot(...q_rel);
-    //             q_rel = q_rel.map(v => v / len);
 
-    //             // Slerp smoothing
-    //             if (!smoothQuaternion) {
-    //                 smoothQuaternion = q_rel;
-    //             } else {
-    //                 smoothQuaternion = quaternionSlerp(smoothQuaternion, q_rel, slerpFactor);
-    //             }
 
-    //             let rotMatrix = quaternionToRotationMatrix(smoothQuaternion);
-    //             let inv = invert4(viewMatrix);
-    //             inv = multiply4(inv, rotMatrix);
-    //             viewMatrix = invert4(inv);
 
-    //             lastQuaternion = q;
-    //         }
-    //     }
-    // }, { passive: false });
+
+
+
+
+
+
+
 
     let altX = 0,
         altY = 0;
