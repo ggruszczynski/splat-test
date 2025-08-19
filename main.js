@@ -1089,10 +1089,13 @@ async function main() {
     //     }
     // }, { passive: false });
 
-    let lastQuaternion = null;
-    let smoothQuaternion = null;
+
     const orientationSensitivity = 0.75;
-    const slerpFactor = 0.15; // Lower = smoother
+
+    let lastQuaternion = null;
+    let targetQuaternion = null;
+    let smoothQuaternion = [1, 0, 0, 0]; // identity
+    const slerpFactor = 0.1; // adjust for smoothness
 
 
     let calibrationActive = true;
@@ -1102,38 +1105,21 @@ async function main() {
     const calibrationDuration = 5000; // ms
 
     function quaternionSlerp(q1, q2, t) {
-        // Spherical linear interpolation between two quaternions
-        let dot = quaternionDot(q1, q2);
-
-        // If dot < 0, slerp the other way (avoid long path)
-        if (dot < 0.0) {
-            q2 = q2.map(v => -v);
-            dot = -dot;
-        }
-
-        // Clamp dot to avoid acos domain errors
-        dot = Math.min(Math.max(dot, -1), 1);
-
+        let dot = q1[0]*q2[0] + q1[1]*q2[1] + q1[2]*q2[2] + q1[3]*q2[3];
+        if (dot < 0) { q2 = q2.map(v => -v); dot = -dot; }
         if (dot > 0.9995) {
-            // Quaternions are very close, use linear interpolation
-            let result = q1.map((v, i) => v + t * (q2[i] - v));
-            // Normalize
+            let result = q1.map((v,i) => v + t*(q2[i]-v));
             let len = Math.hypot(...result);
-            return result.map(v => v / len);
+            return result.map(v => v/len);
         }
-
-        let theta_0 = Math.acos(dot);
-        let theta = theta_0 * t;
-        let sin_theta = Math.sin(theta);
-        let sin_theta_0 = Math.sin(theta_0);
-
-        let s0 = Math.cos(theta) - dot * sin_theta / sin_theta_0;
-        let s1 = sin_theta / sin_theta_0;
-
-        let result = q1.map((v, i) => s0 * v + s1 * q2[i]);
-        // Normalize
-        let len = Math.hypot(...result);
-        return result.map(v => v / len);
+        let theta0 = Math.acos(dot);
+        let theta = theta0 * t;
+        let sin0 = Math.sin(theta0);
+        let s0 = Math.cos(theta) - dot * Math.sin(theta) / sin0;
+        let s1 = Math.sin(theta) / sin0;
+        let res = q1.map((v,i) => s0*v + s1*q2[i]);
+        let len = Math.hypot(...res);
+        return res.map(v => v/len);
     }
 
     function getScreenOrientation() {
@@ -1142,76 +1128,59 @@ async function main() {
     }
 
     function eulerToQuaternion(alpha, beta, gamma, screenOrientation) {
-        // Convert DeviceOrientation Euler angles to quaternion
-        // See: https://w3c.github.io/deviceorientation/#deviceorientation
-        const degToRad = Math.PI / 180;
-        alpha = alpha ? alpha * degToRad : 0; // Z axis
-        beta = beta ? beta * degToRad : 0;   // X axis
-        gamma = gamma ? gamma * degToRad : 0; // Y axis
-        screenOrientation = screenOrientation * degToRad;
-
-        // ZXY intrinsic rotation
-        const cA = Math.cos(alpha / 2), sA = Math.sin(alpha / 2);
-        const cB = Math.cos(beta / 2),  sB = Math.sin(beta / 2);
-        const cG = Math.cos(gamma / 2), sG = Math.sin(gamma / 2);
-
-        // Quaternion from device orientation
+        const deg2rad = Math.PI/180;
+        alpha *= deg2rad; beta *= deg2rad; gamma *= deg2rad;
+        screenOrientation *= deg2rad;
+        const cA = Math.cos(alpha/2), sA = Math.sin(alpha/2);
+        const cB = Math.cos(beta/2),  sB = Math.sin(beta/2);
+        const cG = Math.cos(gamma/2), sG = Math.sin(gamma/2);
         let q = [
-            cA * cB * cG + sA * sB * sG, // w
-            cA * sB * cG + sA * cB * sG, // x
-            cA * cB * sG - sA * sB * cG, // y
-            sA * cB * cG - cA * sB * sG  // z
+            cA*cB*cG + sA*sB*sG,
+            cA*sB*cG + sA*cB*sG,
+            cA*cB*sG - sA*sB*cG,
+            sA*cB*cG - cA*sB*sG
         ];
-
-        // Apply screen orientation (rotation around Z)
-        const cSO = Math.cos(screenOrientation / 2), sSO = Math.sin(screenOrientation / 2);
-        let qSO = [cSO, 0, 0, sSO];
-        // Quaternion multiplication: q = qSO * q
+        // Apply screen orientation around Z
+        const cSO = Math.cos(screenOrientation/2), sSO = Math.sin(screenOrientation/2);
+        let qSO = [cSO,0,0,sSO];
         let w = qSO[0]*q[0] - qSO[1]*q[1] - qSO[2]*q[2] - qSO[3]*q[3];
         let x = qSO[0]*q[1] + qSO[1]*q[0] + qSO[2]*q[3] - qSO[3]*q[2];
         let y = qSO[0]*q[2] - qSO[1]*q[3] + qSO[2]*q[0] + qSO[3]*q[1];
         let z = qSO[0]*q[3] + qSO[1]*q[2] - qSO[2]*q[1] + qSO[3]*q[0];
-        return [w, x, y, z];
+        return [w,x,y,z];
     }
 
     function quaternionToRotationMatrix(q) {
-        // Converts quaternion [w, x, y, z] to 4x4 rotation matrix (flat array)
-        const w = q[0], x = q[1], y = q[2], z = q[3];
+        const [w,x,y,z] = q;
         return [
-            1 - 2*y*y - 2*z*z, 2*x*y - 2*z*w,     2*x*z + 2*y*w,     0,
-            2*x*y + 2*z*w,     1 - 2*x*x - 2*z*z, 2*y*z - 2*x*w,     0,
-            2*x*z - 2*y*w,     2*y*z + 2*x*w,     1 - 2*x*x - 2*y*y, 0,
-            0,                 0,                 0,                 1
+            1-2*y*y-2*z*z, 2*x*y-2*z*w,   2*x*z+2*y*w,   0,
+            2*x*y+2*z*w,   1-2*x*x-2*z*z, 2*y*z-2*x*w,   0,
+            2*x*z-2*y*w,   2*y*z+2*x*w,   1-2*x*x-2*y*y, 0,
+            0,0,0,1
         ];
     }
 
-    function quaternionDot(q1, q2) {
-        // Dot product of two quaternions
-        return q1[0]*q2[0] + q1[1]*q2[1] + q1[2]*q2[2] + q1[3]*q2[3];
-    }
-
-    window.addEventListener("deviceorientation", (e) => {
+    // capture orientation but don’t apply immediately
+    window.addEventListener("deviceorientation", e => {
         if (e.alpha != null && e.beta != null && e.gamma != null) {
-            const screenOrientation = getScreenOrientation();
-            const q = eulerToQuaternion(e.alpha, e.beta, e.gamma, screenOrientation);
-
-            if (lastQuaternion) {
-                // Compute delta quaternion (rotation since last frame)
-                // For simplicity, apply the new orientation directly:
-                let rotMatrix = quaternionToRotationMatrix(q);
-
-                // Optionally, blend with previous orientation for smoothness:
-                // (not shown here for brevity)
-
-                // Apply rotation to viewMatrix
-                let inv = invert4(viewMatrix);
-                inv = multiply4(inv, rotMatrix);
-                viewMatrix = invert4(inv);
-            }
-            lastQuaternion = q;
+            const screenOrientation = (screen.orientation && screen.orientation.angle) || 0;
+            targetQuaternion = eulerToQuaternion(e.alpha, e.beta, e.gamma, screenOrientation);
         }
-    }, { passive: false });
-    
+    }, {passive:true});
+
+    // apply smoothly once per frame
+    function updateOrientation() {
+        if (targetQuaternion) {
+            smoothQuaternion = quaternionSlerp(smoothQuaternion, targetQuaternion, slerpFactor);
+            let rotMatrix = quaternionToRotationMatrix(smoothQuaternion);
+            let inv = invert4(viewMatrix);
+            inv = multiply4(inv, rotMatrix);
+            viewMatrix = invert4(inv);
+        }
+        requestAnimationFrame(updateOrientation);
+    }
+    updateOrientation();
+        
     // window.addEventListener("deviceorientation", (e) => {
     //     if (e.alpha != null && e.beta != null && e.gamma != null) {
     //         const screenOrientation = getScreenOrientation();
