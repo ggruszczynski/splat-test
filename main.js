@@ -1094,6 +1094,13 @@ async function main() {
     const orientationSensitivity = 0.75;
     const slerpFactor = 0.15; // Lower = smoother
 
+
+    let calibrationActive = true;
+    let calibrationStartTime = null;
+    let calibrationSamples = [];
+    let referenceQuaternion = null;
+    const calibrationDuration = 5000; // ms
+
     function quaternionSlerp(q1, q2, t) {
         // Spherical linear interpolation between two quaternions
         let dot = quaternionDot(q1, q2);
@@ -1189,27 +1196,63 @@ async function main() {
             const screenOrientation = getScreenOrientation();
             let q = eulerToQuaternion(e.alpha, e.beta, e.gamma, screenOrientation);
 
-            // If the quaternion is "flipped" compared to last, invert it
-            if (lastQuaternion && quaternionDot(q, lastQuaternion) < 0) {
-                q = q.map(v => -v);
+            // Calibration phase: collect samples for first 5 seconds
+            if (calibrationActive) {
+                if (!calibrationStartTime) calibrationStartTime = Date.now();
+                calibrationSamples.push(q);
+
+                if (Date.now() - calibrationStartTime > calibrationDuration) {
+                    // Average all calibration quaternions
+                    let avg = [0, 0, 0, 0];
+                    for (let sample of calibrationSamples) {
+                        // Ensure same hemisphere for averaging
+                        if (quaternionDot(sample, calibrationSamples[0]) < 0) {
+                            sample = sample.map(v => -v);
+                        }
+                        avg = avg.map((v, i) => v + sample[i]);
+                    }
+                    avg = avg.map(v => v / calibrationSamples.length);
+                    // Normalize
+                    let len = Math.hypot(...avg);
+                    referenceQuaternion = avg.map(v => v / len);
+
+                    calibrationActive = false;
+                    calibrationSamples = [];
+                    console.log("Calibration complete. Reference quaternion:", referenceQuaternion);
+                }
+                return; // Don't update scene during calibration
             }
 
-            // Slerp smoothing
-            if (!smoothQuaternion) {
-                smoothQuaternion = q;
-            } else {
-                smoothQuaternion = quaternionSlerp(smoothQuaternion, q, slerpFactor);
+            // After calibration: apply orientation relative to reference
+            if (referenceQuaternion) {
+                // Compute relative quaternion: q_rel = q * inverse(referenceQuaternion)
+                let refInv = [referenceQuaternion[0], -referenceQuaternion[1], -referenceQuaternion[2], -referenceQuaternion[3]];
+                // Quaternion multiplication: q_rel = q * refInv
+                let w = q[0]*refInv[0] - q[1]*refInv[1] - q[2]*refInv[2] - q[3]*refInv[3];
+                let x = q[0]*refInv[1] + q[1]*refInv[0] + q[2]*refInv[3] - q[3]*refInv[2];
+                let y = q[0]*refInv[2] - q[1]*refInv[3] + q[2]*refInv[0] + q[3]*refInv[1];
+                let z = q[0]*refInv[3] + q[1]*refInv[2] - q[2]*refInv[1] + q[3]*refInv[0];
+                let q_rel = [w, x, y, z];
+                // Normalize
+                let len = Math.hypot(...q_rel);
+                q_rel = q_rel.map(v => v / len);
+
+                // Slerp smoothing
+                if (!smoothQuaternion) {
+                    smoothQuaternion = q_rel;
+                } else {
+                    smoothQuaternion = quaternionSlerp(smoothQuaternion, q_rel, slerpFactor);
+                }
+
+                let rotMatrix = quaternionToRotationMatrix(smoothQuaternion);
+                let inv = invert4(viewMatrix);
+                inv = multiply4(inv, rotMatrix);
+                viewMatrix = invert4(inv);
+
+                lastQuaternion = q;
             }
-
-            let rotMatrix = quaternionToRotationMatrix(smoothQuaternion);
-            let inv = invert4(viewMatrix);
-            inv = multiply4(inv, rotMatrix);
-            viewMatrix = invert4(inv);
-
-            lastQuaternion = q;
         }
     }, { passive: false });
-
 
     let altX = 0,
         altY = 0;
