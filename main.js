@@ -1064,14 +1064,15 @@ async function main() {
 
     // Smartphone orientation event for camera rotation
     let lastAlpha = null, lastBeta = null, lastGamma = null;
+    const orientationSensitivity = 0.75; // Lower = slower reaction
     window.addEventListener("deviceorientation", (e) => {
         // Only rotate if the event provides valid data
         if (e.alpha != null && e.beta != null && e.gamma != null) {
             // Calculate deltas
             if (lastAlpha !== null && lastBeta !== null && lastGamma !== null) {
-                let dAlpha = (e.alpha - lastAlpha) * Math.PI / 180;
-                let dBeta = (e.beta - lastBeta) * Math.PI / 180;
-                let dGamma = (e.gamma - lastGamma) * Math.PI / 180;
+                let dAlpha = -(e.alpha - lastAlpha) * Math.PI / 180 * orientationSensitivity;
+                let dBeta = -(e.beta - lastBeta) * Math.PI / 180 * orientationSensitivity;
+                let dGamma = -(e.gamma - lastGamma) * Math.PI / 180 * orientationSensitivity;
 
                 let inv = invert4(viewMatrix);
                 // Yaw (Z axis)
