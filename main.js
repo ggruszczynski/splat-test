@@ -1064,15 +1064,28 @@ async function main() {
 
     // Smartphone orientation event for camera rotation
     let lastAlpha = null, lastBeta = null, lastGamma = null;
-    const orientationSensitivity = 0.75; // Lower = slower reaction
+    const orientationSensitivity = 0.5; // Lower = slower reaction
+
+    function shortestDelta(a, b) {
+        // delta from a -> b in degrees, wrapped to [-180,180]
+        let d = b - a;
+        d = (d + 540) % 360 - 180;
+        return d;
+    }
+
     window.addEventListener("deviceorientation", (e) => {
         // Only rotate if the event provides valid data
         if (e.alpha != null && e.beta != null && e.gamma != null) {
             // Calculate deltas
             if (lastAlpha !== null && lastBeta !== null && lastGamma !== null) {
-                let dAlpha = -(e.alpha - lastAlpha) * Math.PI / 180 * orientationSensitivity;
-                let dBeta = (e.beta - lastBeta) * Math.PI / 180 * orientationSensitivity;
-                let dGamma = -(e.gamma - lastGamma) * Math.PI / 180 * orientationSensitivity;
+                // let dAlpha = -(e.alpha - lastAlpha) * Math.PI / 180 * orientationSensitivity;
+                // let dBeta = (e.beta - lastBeta) * Math.PI / 180 * orientationSensitivity;
+                // let dGamma = -(e.gamma - lastGamma) * Math.PI / 180 * orientationSensitivity;
+                 // Use shortest path deltas to avoid sudden flips
+                let dAlpha = -shortestDelta(lastAlpha, e.alpha) * Math.PI/180 * orientationSensitivity;
+                let dBeta  =  shortestDelta(lastBeta,  e.beta ) * Math.PI/180 * orientationSensitivity;
+                let dGamma = -shortestDelta(lastGamma, e.gamma) * Math.PI/180 * orientationSensitivity;
+
 
                 let inv = invert4(viewMatrix);
                 
