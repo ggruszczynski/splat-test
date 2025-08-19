@@ -1061,6 +1061,35 @@ async function main() {
         startY = 0;
     });
 
+
+    // Smartphone orientation event for camera rotation
+    let lastAlpha = null, lastBeta = null, lastGamma = null;
+    window.addEventListener("deviceorientation", (e) => {
+        // Only rotate if the event provides valid data
+        if (e.alpha != null && e.beta != null && e.gamma != null) {
+            // Calculate deltas
+            if (lastAlpha !== null && lastBeta !== null && lastGamma !== null) {
+                let dAlpha = (e.alpha - lastAlpha) * Math.PI / 180;
+                let dBeta = (e.beta - lastBeta) * Math.PI / 180;
+                let dGamma = (e.gamma - lastGamma) * Math.PI / 180;
+
+                let inv = invert4(viewMatrix);
+                // Yaw (Z axis)
+                inv = rotate4(inv, dAlpha, 0, 0, 1);
+                // Pitch (X axis)
+                inv = rotate4(inv, dBeta, 1, 0, 0);
+                // Roll (Y axis)
+                inv = rotate4(inv, dGamma, 0, 1, 0);
+
+                viewMatrix = invert4(inv);
+            }
+            lastAlpha = e.alpha;
+            lastBeta = e.beta;
+            lastGamma = e.gamma;
+        }
+    }, { passive: false });
+
+
     let altX = 0,
         altY = 0;
     canvas.addEventListener(
