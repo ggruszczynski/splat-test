@@ -1090,7 +1090,44 @@ async function main() {
     // }, { passive: false });
 
     let lastQuaternion = null;
+    let smoothQuaternion = null;
     const orientationSensitivity = 0.75;
+    const slerpFactor = 0.15; // Lower = smoother
+
+    function quaternionSlerp(q1, q2, t) {
+        // Spherical linear interpolation between two quaternions
+        let dot = quaternionDot(q1, q2);
+
+        // If dot < 0, slerp the other way (avoid long path)
+        if (dot < 0.0) {
+            q2 = q2.map(v => -v);
+            dot = -dot;
+        }
+
+        // Clamp dot to avoid acos domain errors
+        dot = Math.min(Math.max(dot, -1), 1);
+
+        if (dot > 0.9995) {
+            // Quaternions are very close, use linear interpolation
+            let result = q1.map((v, i) => v + t * (q2[i] - v));
+            // Normalize
+            let len = Math.hypot(...result);
+            return result.map(v => v / len);
+        }
+
+        let theta_0 = Math.acos(dot);
+        let theta = theta_0 * t;
+        let sin_theta = Math.sin(theta);
+        let sin_theta_0 = Math.sin(theta_0);
+
+        let s0 = Math.cos(theta) - dot * sin_theta / sin_theta_0;
+        let s1 = sin_theta / sin_theta_0;
+
+        let result = q1.map((v, i) => s0 * v + s1 * q2[i]);
+        // Normalize
+        let len = Math.hypot(...result);
+        return result.map(v => v / len);
+    }
 
     function getScreenOrientation() {
         // Returns angle in degrees: 0, 90, 180, 270
@@ -1141,24 +1178,34 @@ async function main() {
         ];
     }
 
+    function quaternionDot(q1, q2) {
+        // Dot product of two quaternions
+        return q1[0]*q2[0] + q1[1]*q2[1] + q1[2]*q2[2] + q1[3]*q2[3];
+    }
+
+
     window.addEventListener("deviceorientation", (e) => {
         if (e.alpha != null && e.beta != null && e.gamma != null) {
             const screenOrientation = getScreenOrientation();
-            const q = eulerToQuaternion(e.alpha, e.beta, e.gamma, screenOrientation);
+            let q = eulerToQuaternion(e.alpha, e.beta, e.gamma, screenOrientation);
 
-            if (lastQuaternion) {
-                // Compute delta quaternion (rotation since last frame)
-                // For simplicity, apply the new orientation directly:
-                let rotMatrix = quaternionToRotationMatrix(q);
-
-                // Optionally, blend with previous orientation for smoothness:
-                // (not shown here for brevity)
-
-                // Apply rotation to viewMatrix
-                let inv = invert4(viewMatrix);
-                inv = multiply4(inv, rotMatrix);
-                viewMatrix = invert4(inv);
+            // If the quaternion is "flipped" compared to last, invert it
+            if (lastQuaternion && quaternionDot(q, lastQuaternion) < 0) {
+                q = q.map(v => -v);
             }
+
+            // Slerp smoothing
+            if (!smoothQuaternion) {
+                smoothQuaternion = q;
+            } else {
+                smoothQuaternion = quaternionSlerp(smoothQuaternion, q, slerpFactor);
+            }
+
+            let rotMatrix = quaternionToRotationMatrix(smoothQuaternion);
+            let inv = invert4(viewMatrix);
+            inv = multiply4(inv, rotMatrix);
+            viewMatrix = invert4(inv);
+
             lastQuaternion = q;
         }
     }, { passive: false });
