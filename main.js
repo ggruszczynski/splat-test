@@ -1071,17 +1071,15 @@ async function main() {
             // Calculate deltas
             if (lastAlpha !== null && lastBeta !== null && lastGamma !== null) {
                 let dAlpha = -(e.alpha - lastAlpha) * Math.PI / 180 * orientationSensitivity;
-                let dBeta = -(e.beta - lastBeta) * Math.PI / 180 * orientationSensitivity;
+                let dBeta = (e.beta - lastBeta) * Math.PI / 180 * orientationSensitivity;
                 let dGamma = -(e.gamma - lastGamma) * Math.PI / 180 * orientationSensitivity;
 
                 let inv = invert4(viewMatrix);
-                // Yaw (Z axis)
-                inv = rotate4(inv, dAlpha, 0, 0, 1);
-                // Pitch (X axis)
-                inv = rotate4(inv, dBeta, 1, 0, 0);
-                // Roll (Y axis)
-                inv = rotate4(inv, dGamma, 0, 1, 0);
-
+                
+                inv = rotate4(inv, dBeta,  1, 0, 0); // Pitch (X axis): W-S keys
+                inv = rotate4(inv, dGamma, 0, 1, 0); // Roll (Y axis): A-D keys
+                inv = rotate4(inv, dAlpha, 0, 0, 1); // Yaw (Z axis): Q-E keys  
+            
                 viewMatrix = invert4(inv);
             }
             lastAlpha = e.alpha;
